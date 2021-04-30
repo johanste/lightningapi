@@ -1,0 +1,8 @@
+Client -> LightningRP: Connect (sessionId)
+Client -> ARMFD: Long running operation (notification-session-id: <sessionId>)
+ARMFD -> Client: 202 Accepted\nnotification-session-result: accepted\nx-ms-correlation-id: <correlationId>
+LightningRP --> Client: Push { correlationId }
+Client -> ARMDF: GET final status
+ARMFD -> Client: 200 OK, <final operation status>
+
+
