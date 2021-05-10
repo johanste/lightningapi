@@ -73,7 +73,7 @@ TODO
 
 ### Message format
 
-Messages uses the [CloudEvents v1.0](https://cloudevents.io) schema. 
+Messages uses the [websockets protocol binding](https://github.com/cloudevents/spec/blob/v1.0.1/websockets-protocol-binding.md) of [CloudEvents v1.0](https://cloudevents.io). 
 
 #### ConnectToSessionMessage
 
