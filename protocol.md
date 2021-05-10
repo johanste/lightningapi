@@ -67,13 +67,13 @@ The client MUST close the notification channel once its session has completed.
 
 If the notification channel connection is lost, the client MUST assume that all notifications associated with the session are lost and fall back to normal polling for operation completion The client MAY reconnect to the notification service using the same `sessionId` in order to short-circuit the HTTP polling procedure.
 
-## Authentication and Autorization
+## Authentication and Authorization
 
 TODO
 
 ### Message format
 
-Each message has a `"kind"` field that indicate what message type it is. In the first version, there is a single message kind `"completion"`.
+Messages uses the [CloudEvents v1.0](https://cloudevents.io) schema. 
 
 #### ConnectToSessionMessage
 
@@ -83,12 +83,19 @@ GET /notifications?subscriptionId=...&sessionId=...&api-version=1971-11-01
 
 #### OperationCompletedMessage
 
-The `OperationCompletedMessage` only includes the `sessionNotificationId`.
+The `com.azure.operationcompletion` message type includes the following .
 
 ```json
 {
-    "kind": "completion",
-    "sessionNotificationId": "<notificationId>"
+    "specversion": "1.0",
+    "source": "com.management.azure",
+    "id": <operationUrl>,
+    "type": "com.azure.operationcompletion",
+    "subject": <sessionNotificationId>,
+    "datacontenttype": "application/json",
+    "data": {
+        "sessionId": <sessionId>
+    }
 }
 ```
 
