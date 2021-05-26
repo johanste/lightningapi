@@ -1,27 +1,44 @@
 # Notification channel protocols (the last mile)
 
-The Microsoft REST API guidelines outlines how to expose push notifications via webhooks. However, it does not provide a mechanism by which a service can push notifications to clients that are unable to receive HTTP requests/have an open port to receive incoming connections.
+The [Microsoft REST API guidelines](https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md) outlines how to expose push notifications via webhooks. However, it does not provide a mechanism by which a service can push notifications to clients that are unable to receive HTTP requests/have an open port to receive incoming connections.
+
+The proposal below adapts the [per-resource](https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md#153-types-of-subscriptions) type of transient subscriptions to using a duplex connection initiated by the client application.
 
 ### Requirements
 
-- Only require a single (possibly multiplexed) connection between the client and the service.
-- Non-breaking (polling must still be possible)
+- Only require a single (possibly multiplexed) connection between the client process and the service.
+- Non-breaking for existing clients (HTTP polling must still be possible)
 - No race conditions where notifications are lost due to the client not having set up a notification channel yet.
 - Networking stack support for tier 1 client languages (i.e. .NET, TypeScript/javascript, Java and Python)
 - No information leak (receiving notifications for resources the client would not otherwise be allowed to read)
 
 ### Non goals
 
-- Replace existing polling. The push notification protocol is additive to existing service API capabilities.
-- Get asynchronous notifications for state changes not initiated by the client (e.g. continously listen for power state changes for a VM)
+- Fully replace existing polling. The push notification capability is *in addition* to existing service API capabilities.
+- Get asynchronous notifications for state changes not initiated by the client (e.g. continously listen for power state changes for a VM). However, the protocol is generic enough that it could support it in the future.
 
 ## Protocol
 
-The client initiates a session by opening a [websocket](https://tools.ietf.org/html/rfc6455) connection to the service, providing a unique `sessionId` and `subscriptionId`.
+The client initiates a request for receving push notifications by opening a [websocket](https://tools.ietf.org/html/rfc6455) connection to the service, providing a `source` "com.azure.management", a comma separated value of `eventTypes` (currently only `com.azure.operationcompletion` is supported) and a `subject` query parameter.
 
-> Note: The `subscriptionId` is the Azure Subscription Id in the case of Azure Resource Manager, but could be a different identifier for other services - e.g. the resource id for a cognitive service account.
+The `subject` query parameter is combination of the subscription for which they want to receive notifications and a client generated `sessionId`.
 
-The client includes the same `sessionId` along with a new, unique `notificationId` value in a header for each request that the client wants to receive notifications for.
+```
+GET /notifications?source=com.azure.management&eventTypes=com.azure.operationcompletion&subject={subscriptionId}/(sessionId} HTTP/1.1
+```
+
+Example:
+```http
+GET /notifications?source=com.azure.management&eventTypes=com.azure.operationcompletion&subject=72f988be-86f1-412f-91ab-2d7cd011db47/34f019b1-4da4-4f7c-a125-5bdaffd5e33d HTTP/1.1
+```
+
+> Note: The first part of the subject query parameter value is the Azure Subscription Id in the case of Azure Resource Manager, but could be a different identifier for other services - e.g. the resource id for a cognitive service account.
+
+> Note: We want to provide enough information in the initial request that the service can redirect the connection to the appropriate node if necessary. If the subscription filter/information was moved to a request body, the connection would have to be torn down and re-established if redirection was needed.
+
+> Future consideration: it is possible to add more filtering capabilities to the original request - e.g. url encoded "filter" using the event grid [event filter format](https://docs.microsoft.com/en-us/azure/event-grid/event-filtering#advanced-filtering)? A service would not be required to understand the full set of filter capabilities, but using the same vocabulary would have value. This is not needed for long running operation notifications, and can be added later.
+
+The client subsequently includes the same `sessionId` value along with a new, unique `notificationId` value in a header for each request that the client wants to receive notifications for.
 
 > Note: While the `sessionId` could be server generated, it is preferable for the client to generate - or at least be able to provide - the `sessionId` in order to allow for multiple clients to connect to the same notification channel or addition to allowing the client to re-connect to the same channel in case of lost connections. Similarly, allowing the client to generate the `notificationId` avoids any race conditions that may otherwise occur if the operation completed before the response for the initial request reached the client. 
 
@@ -59,7 +76,7 @@ A client MUST generate a new, within the session, unique `notificationId` for ea
 
 A client MUST ignore to it unknown `notificationId`s. A client MUST ignore a `notificationId` that is has previously received/handled. 
 
-The client MUST follow HTTP `307 - Temporary Redirect` responses when trying to connect. It SHOULD limit the number of followed redirects to a maximum of 10
+The client MUST follow HTTP `307 - Temporary Redirect` responses to allow the server to redirect to the appropriate node. It SHOULD limit the number of followed redirects to a maximum of 10
 
 While the session is active over a WebSocket connection (there are outstanding notifications), the client MUST send a [`Ping`](https://tools.ietf.org/html/rfc6455#section-5.5.2) every 20s in order to keep the notification channel open.
 
@@ -78,32 +95,52 @@ Messages uses the [websockets protocol binding](https://github.com/cloudevents/s
 #### ConnectToSessionMessage
 
 ```http
-GET /notifications?subscriptionId=...&sessionId=...&api-version=1971-11-01
+GET /notifications?type=com.azure.operationcompletion&subject=...&data.sessionId=...&api-version=1971-11-01
 ```
 
 #### OperationCompletedMessage
 
-The `com.azure.operationcompletion` message type includes the following .
+The `com.azure.operationcompletion` message type includes the following information:
 
 ```json
 {
     "specversion": "1.0",
     "source": "com.management.azure",
-    "id": <operationUrl>,
+    "id": "{server generated unique id}",
     "type": "com.azure.operationcompletion",
-    "subject": <sessionNotificationId>,
+    "subject": "{subscriptionId}/{sessionId}",
     "datacontenttype": "application/json",
     "data": {
-        "sessionId": <sessionId>
+        "operationUrl": "{operationUrl}",
+        "subscriptionNotificationId": "{sessionNotificationId}"
     }
 }
 ```
 
 ## Versioning considerations
 
-## Current technologies
+Versioning of events needs to adhere to the same constraints as event schemas for system events for event grid.
 
-- EventGrid
-- EventHubs, Storage queues, Service Bus
-- Azure relay
-- SignalR
+## Related technologies
+
+### EventGrid
+
+- Does not support transient subscriptions
+- Limited support for light-weight client protocols for connectors (e.g. AMQP require binary dependencies and/or has large library footprint)
+
+### EventHubs, Service Bus
+Can be used as an event handler for azure event grid 
+
+- AMQP requried on the client
+
+### Storage queues
+Can be used as an event handler for azure event grid
+
+- Still requires polling from the client
+
+### Azure relay
+Exposes a service endpoint(s) from inside customer's network as a public endpoint. 
+
+- Heavy to create/not transient
+- Exposes specific service/application, not individual processes. 
+
